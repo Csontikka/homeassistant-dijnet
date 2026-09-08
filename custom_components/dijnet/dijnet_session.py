@@ -22,7 +22,15 @@ class DijnetSession:
 
     async def __aenter__(self: Self):
         """Enter the async context manager."""
-        self._session = aiohttp.ClientSession()
+        # quote_cookie=False is required, not a preference. Dijnet is behind
+        # HAProxy, whose session-affinity cookie carries a pipe in its value
+        # (HAPROXY_SESSION=as51|ap/io). aiohttp 3.12 started quoting such
+        # values; HAProxy does not accept the quoted form, so every request
+        # after the login goes to a backend that does not know the session and
+        # Dijnet returns the login page instead of the requested one.
+        self._session = aiohttp.ClientSession(
+            cookie_jar=aiohttp.CookieJar(quote_cookie=False)
+        )
         return self
 
     async def __aexit__(
