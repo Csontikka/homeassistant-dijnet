@@ -14,13 +14,19 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import PlatformNotReady
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import CONF_DOWNLOAD_DIR, DOMAIN
-from .controller import DijnetController, InvoiceIssuer, get_controller
+from .controller import (
+    DijnetController,
+    DijnetPageError,
+    InvoiceIssuer,
+    get_controller,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,7 +84,14 @@ async def async_setup_entry(
 
     controller = get_controller(hass, config_entry.data[CONF_USERNAME])
 
-    for registered_invoice_issuer in await controller.get_issuers():
+    try:
+        registered_invoice_issuers = await controller.get_issuers()
+    except DijnetPageError as error:
+        # Not a permanent failure: let Home Assistant retry the platform
+        # instead of leaving every entity unavailable until a restart.
+        raise PlatformNotReady(str(error)) from error
+
+    for registered_invoice_issuer in registered_invoice_issuers:
         async_add_entities(
             [
                 InvoiceAmountSensor(

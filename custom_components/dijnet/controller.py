@@ -23,10 +23,24 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class DijnetPageError(Exception):
+    """Dijnet answered with a page the integration cannot read.
+
+    Usually a session that is no longer valid: Dijnet allows one active
+    session per account, so logging in from anywhere else (a second Home
+    Assistant, a browser) ends this one and every page turns into the
+    login screen.
+    """
+
 MIN_DATE = "1990-01-01"
 DATE_FORMAT = "%Y.%m.%d"
 MIN_TIME_BETWEEN_UPDATES = timedelta(hours=3)
 MIN_TIME_BETWEEN_ISSUER_UPDATES = timedelta(days=1)
+# After a failed page load, do not log in again for this long. Home
+# Assistant retries a not-ready platform on its own schedule, and every
+# attempt would otherwise be another login on dijnet.hu.
+RETRY_COOLDOWN = timedelta(minutes=15)
 PAID_INVOICES_FILENAME = ".dijnet_paid_invoices_{0}.yaml"
 REGISTRY_FILENAME = ".dijnet_registry_{0}.yaml"
 ATTR_REGISTRY_NEXT_QUERY_DATE = "next_query_date"
@@ -325,6 +339,7 @@ class DijnetController:
         self._unpaid_invoices: list[Invoice] = []
         self._paid_invoices: list[Invoice] = []
         self._issuers: list[InvoiceIssuer] = []
+        self._issuers_failed_at: datetime | None = None
         self._remove_old_files()
 
     def _remove_old_files(self: Self) -> None:
@@ -380,6 +395,17 @@ class DijnetController:
         """Updates the registered issuers list."""
         issuers: list[InvoiceIssuer] = []
 
+        if self._issuers_failed_at is not None:
+            since = datetime.now(tz=TZ) - self._issuers_failed_at
+            if since < RETRY_COOLDOWN:
+                # Answer from memory: no login, no request, nothing for Dijnet
+                # to count against the account.
+                wait = int((RETRY_COOLDOWN - since).total_seconds())
+                raise DijnetPageError(
+                    f"Waiting {wait} more seconds before contacting Dijnet again "
+                    "after the previous failure"
+                )
+
         _LOGGER.debug("Updating issuers.")
 
         async with DijnetSession() as session:
@@ -392,9 +418,22 @@ class DijnetController:
 
             search_page = await session.get_invoice_search_page()
 
-            providers_json = re.search(
-                r"var ropts = (.*);", search_page.decode("iso-8859-2")
-            ).groups(1)[0]
+            search_page_text = search_page.decode("iso-8859-2")
+            providers_match = re.search(r"var ropts = (.*);", search_page_text)
+            if providers_match is None:
+                self._issuers_failed_at = datetime.now(tz=TZ)
+                excerpt = " ".join(search_page_text.split())[:200]
+                _LOGGER.error(
+                    "The invoice search page did not contain the provider list "
+                    "(%s bytes). Dijnet allows one session per account, so this is "
+                    "usually the login screen after the session was ended elsewhere. "
+                    "Page starts with: %s",
+                    len(search_page),
+                    excerpt,
+                )
+                raise DijnetPageError("Dijnet did not return the invoice search page")
+
+            providers_json = providers_match.groups(1)[0]
 
             raw_providers: list[Any] = json.loads(providers_json)
 
@@ -419,6 +458,7 @@ class DijnetController:
                 _LOGGER.debug("Issuer found (%s)", issuer)
 
             self._issuers = issuers
+            self._issuers_failed_at = None
 
     @Throttle(MIN_TIME_BETWEEN_UPDATES)
     async def update_invoices(self: Self) -> None:  # noqa: PLR0912, PLR0915, C901
