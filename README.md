@@ -1,15 +1,17 @@
 # homeassistant-dijnet
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
-![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/laszlojakab/homeassistant-dijnet?include_prereleases)
-![GitHub](https://img.shields.io/github/license/laszlojakab/homeassistant-dijnet?)
-![GitHub all releases](https://img.shields.io/github/downloads/laszlojakab/homeassistant-dijnet/total)
-[![HA integration usage](https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=integration%20usage&suffix=%20installs&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$.dijnet.total)](https://analytics.home-assistant.io/custom_integrations.json)
-[![Donate](https://img.shields.io/badge/donate-Coffee-yellow.svg)](https://www.buymeacoffee.com/laszlojakab)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/Csontikka/homeassistant-dijnet?style=plastic)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=plastic)](https://github.com/hacs/integration)
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg?style=plastic)](https://github.com/Csontikka/homeassistant-dijnet/blob/develop/LICENSE)
+[![HA integration usage](https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=integration%20usage&suffix=%20installs&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$.dijnet.total&style=plastic)](https://analytics.home-assistant.io/custom_integrations.json)
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa.svg?style=plastic&logo=githubsponsors)](https://github.com/sponsors/Csontikka)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-donate-yellow.svg?style=plastic)](https://buymeacoffee.com/Csontikka)
 
 [Dijnet](https://www.dijnet.hu/) integration for [Home Assistant](https://www.home-assistant.io/)
 
 > **This is a fork.** It adds one thing to [laszlojakab/homeassistant-dijnet](https://github.com/laszlojakab/homeassistant-dijnet): the invoice state text is kept in a `payment_method` attribute instead of being discarded, so a direct debit can be told apart from an invoice that has to be paid by hand. See [Payment method](#payment-method). Everything else is upstream.
+>
+> The integration itself is written by [laszlojakab](https://github.com/laszlojakab). If it is useful to you, [buy him a coffee](https://www.buymeacoffee.com/laszlojakab) - the badges above only cover the upkeep of this fork.
 
 ## Installation
 
