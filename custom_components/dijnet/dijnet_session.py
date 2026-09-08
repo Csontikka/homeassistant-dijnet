@@ -28,9 +28,7 @@ class DijnetSession:
         # values; HAProxy does not accept the quoted form, so every request
         # after the login goes to a backend that does not know the session and
         # Dijnet returns the login page instead of the requested one.
-        self._session = aiohttp.ClientSession(
-            cookie_jar=aiohttp.CookieJar(quote_cookie=False)
-        )
+        self._session = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(quote_cookie=False))
         return self
 
     async def __aexit__(

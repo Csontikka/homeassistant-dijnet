@@ -25,13 +25,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class DijnetPageError(Exception):
-    """Dijnet answered with a page the integration cannot read.
-
-    Usually a session that is no longer valid: Dijnet allows one active
-    session per account, so logging in from anywhere else (a second Home
-    Assistant, a browser) ends this one and every page turns into the
-    login screen.
     """
+    Dijnet answered with a page the integration cannot read.
+
+    Almost always the login screen, which is what Dijnet serves when
+    it does not accept the session that the request carries.
+    """
+
 
 MIN_DATE = "1990-01-01"
 DATE_FORMAT = "%Y.%m.%d"
@@ -425,9 +425,8 @@ class DijnetController:
                 excerpt = " ".join(search_page_text.split())[:200]
                 _LOGGER.error(
                     "The invoice search page did not contain the provider list "
-                    "(%s bytes). Dijnet allows one session per account, so this is "
-                    "usually the login screen after the session was ended elsewhere. "
-                    "Page starts with: %s",
+                    "(%s bytes). This is usually the login screen, which means the "
+                    "session was not accepted. Page starts with: %s",
                     len(search_page),
                     excerpt,
                 )
