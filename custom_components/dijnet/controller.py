@@ -37,6 +37,7 @@ ATTR_INVOICE_NO = "invoice_no"
 ATTR_ISSUANCE_DATE = "issuance_date"
 ATTR_DEADLINE = "deadline"
 ATTR_AMOUNT = "amount"
+ATTR_PAYMENT_METHOD = "payment_method"
 PAID_KEY = "paid"
 ATTR_PAID_AT = "paid_at"
 
@@ -103,6 +104,7 @@ class Invoice:
         issuance_date: datetime,
         amount: int,
         deadline: datetime,
+        payment_method: str | None = None,
     ):
         """
         Initialize a new instance of Invoice class.
@@ -120,6 +122,11 @@ class Invoice:
             The invoice amount.
           deadline:
             The deadline.
+          payment_method:
+            The raw text of the invoice state column on the Dijnet website.
+            It carries the payment method ("Csoportos beszedes") next to the
+            payment state, and Dijnet is free to reword it, so it is stored
+            verbatim and interpreted by the consumer.
         """
         self._provider = provider
         self._display_name = display_name
@@ -127,6 +134,7 @@ class Invoice:
         self._issuance_date = issuance_date
         self._amount = amount
         self._deadline = deadline
+        self._payment_method = payment_method
 
     @property
     def provider(self: Self) -> str:
@@ -158,6 +166,11 @@ class Invoice:
         """Gets the deadline."""
         return self._deadline
 
+    @property
+    def payment_method(self: Self) -> str | None:
+        """Gets the raw state column text of the invoice."""
+        return self._payment_method
+
     def __eq__(self: Self, obj: object):
         """Implements the equality operator."""
         return (
@@ -184,6 +197,7 @@ class Invoice:
             ATTR_ISSUANCE_DATE: self.issuance_date,
             ATTR_AMOUNT: self.amount,
             ATTR_DEADLINE: self.deadline,
+            ATTR_PAYMENT_METHOD: self.payment_method,
         }
 
     def __str__(self: Self):
@@ -203,6 +217,7 @@ class PaidInvoice(Invoice):
         amount: int,
         deadline: datetime,
         paid_at: datetime,
+        payment_method: str | None = None,
     ) -> None:
         """
         Initialize a new instance of Invoice class.
@@ -222,8 +237,12 @@ class PaidInvoice(Invoice):
             The deadline.
           paid_at:
             The date of payment.
+          payment_method:
+            The raw text of the invoice state column on the Dijnet website.
         """
-        super().__init__(provider, display_name, invoice_no, issuance_date, amount, deadline)
+        super().__init__(
+            provider, display_name, invoice_no, issuance_date, amount, deadline, payment_method
+        )
         self._paid_at = paid_at
 
     @property
@@ -255,6 +274,7 @@ class PaidInvoice(Invoice):
             if isinstance(dictionary[ATTR_DEADLINE], datetime)
             else dictionary[ATTR_DEADLINE],
             dictionary[ATTR_PAID_AT],
+            dictionary.get(ATTR_PAYMENT_METHOD),
         )
 
     def to_dictionary(self: Self) -> dict[str, Any]:
@@ -603,13 +623,24 @@ class DijnetController:
             .isoformat()
         )
 
+        payment_method = row.children("td:nth-child(8)").text()
+
         invoice: Invoice = None
         if paid_at:
             invoice = PaidInvoice(
-                provider, display_name, invoice_no, issuance_date, amount, deadline, paid_at
+                provider,
+                display_name,
+                invoice_no,
+                issuance_date,
+                amount,
+                deadline,
+                paid_at,
+                payment_method,
             )
         else:
-            invoice = Invoice(provider, display_name, invoice_no, issuance_date, amount, deadline)
+            invoice = Invoice(
+                provider, display_name, invoice_no, issuance_date, amount, deadline, payment_method
+            )
 
         _LOGGER.info("Invoice created. %s", invoice)
 
