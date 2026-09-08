@@ -61,8 +61,18 @@ alone, which is why every unpaid invoice used to look equally urgent.
 
 The examples below build on one rule:
 
-> An unpaid invoice needs attention **unless** its `payment_method` is
-> `Csoportos beszedés` **and** its deadline has not passed yet.
+> An unpaid invoice needs attention **unless** its `payment_method` says the
+> bank is collecting it (`Csoportos beszedés` or `Beszedés alatt`) **and** its
+> deadline has not passed yet.
+
+Match those two as **substrings**, not with `==`. That is what the component
+itself does (`controller._is_invoice_paid` puts both into one `collection`
+case), and Dijnet is free to pad the cell with anything else.
+
+One state does not reach these examples at all: if the text matches none of the
+patterns the component knows, the invoice is logged as an error and skipped, so
+it never appears in `unpaid_invoices`. Worth keeping in mind before treating an
+empty list as "nothing to pay".
 
 ### Example: summary sensors
 
@@ -84,7 +94,8 @@ template:
           {% for e in ids %}{% for inv in state_attr(e, 'unpaid_invoices') or [] %}
             {% set deadline = as_datetime(inv.deadline | default('', true)) %}
             {% set days = (deadline.date() - now().date()).days if deadline else 999 %}
-            {% set debit = (inv.payment_method | default('', true)) == 'Csoportos beszedés' %}
+            {% set pm = inv.payment_method | default('', true) %}
+            {% set debit = 'Csoportos beszedés' in pm or 'Beszedés alatt' in pm %}
             {% if not (debit and days >= 0) %}{% set ns.count = ns.count + 1 %}{% endif %}
           {% endfor %}{% endfor %}
           {{ ns.count }}
@@ -100,7 +111,8 @@ template:
           {% for e in ids %}{% for inv in state_attr(e, 'unpaid_invoices') or [] %}
             {% set deadline = as_datetime(inv.deadline | default('', true)) %}
             {% set days = (deadline.date() - now().date()).days if deadline else 999 %}
-            {% set debit = (inv.payment_method | default('', true)) == 'Csoportos beszedés' %}
+            {% set pm = inv.payment_method | default('', true) %}
+            {% set debit = 'Csoportos beszedés' in pm or 'Beszedés alatt' in pm %}
             {% if debit and days >= 0 %}{% set ns.count = ns.count + 1 %}{% endif %}
           {% endfor %}{% endfor %}
           {{ ns.count }}
@@ -201,7 +213,8 @@ A markdown card can list the two groups separately:
 {% for e in ids %}{% for inv in state_attr(e, 'unpaid_invoices') or [] %}
   {%- set deadline = as_datetime(inv.deadline | default('', true)) %}
   {%- set days = (deadline.date() - now().date()).days if deadline else 999 %}
-  {%- set debit = (inv.payment_method | default('', true)) == 'Csoportos beszedés' %}
+  {%- set pm = inv.payment_method | default('', true) %}
+  {%- set debit = 'Csoportos beszedés' in pm or 'Beszedés alatt' in pm %}
 - {{ inv.display_name }}: {{ inv.amount }} Ft - {{ inv.deadline }}
   {%- if debit and days >= 0 %} (direct debit, no action needed)
   {%- elif days < 0 %} **overdue**
