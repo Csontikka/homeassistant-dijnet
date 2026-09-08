@@ -110,7 +110,7 @@ class InvoiceIssuer:
 class Invoice:
     """Represents an invoice."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self: Self,
         provider: str,
         display_name: str,
@@ -222,7 +222,7 @@ class Invoice:
 class PaidInvoice(Invoice):
     """Represents a paid invoice."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self: Self,
         provider: str,
         display_name: str,
@@ -575,7 +575,7 @@ class DijnetController:
 
                         full_path = path.join(directory, filename)
 
-                        if path.exists(full_path):
+                        if await anyio.Path(full_path).exists():
                             _LOGGER.debug("File already downloaded (%s)", full_path)
                         else:
                             _LOGGER.info("Downloading file (%s -> %s).", download_url, full_path)

@@ -16,6 +16,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip3 install homeassistant
-      - run: pip3 install ruff
+      # Pinned to a minor series: the workflow used to install whatever ruff
+      # was newest, so a release that only added rules turned this job red
+      # without a single line changing here.
+      - run: pip3 install 'ruff~=0.16.0'
       - run: ruff check
       - run: ruff format
