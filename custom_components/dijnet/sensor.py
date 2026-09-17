@@ -15,6 +15,7 @@ from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import PlatformNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -27,8 +28,11 @@ from .controller import (
     InvoiceIssuer,
     get_controller,
 )
+from .provider_names import pair_renamed
 
 _LOGGER = logging.getLogger(__name__)
+
+UNIQUE_ID_SUFFIX = "_amount"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -92,6 +96,9 @@ async def async_setup_entry(
         raise PlatformNotReady(str(error)) from error
 
     for registered_invoice_issuer in registered_invoice_issuers:
+        _migrate_renamed_providers(hass, config_entry.entry_id, registered_invoice_issuer)
+
+    for registered_invoice_issuer in registered_invoice_issuers:
         async_add_entities(
             [
                 InvoiceAmountSensor(
@@ -104,6 +111,91 @@ async def async_setup_entry(
 
     _LOGGER.info("Setting up Dijnet sensors completed.")
     return True
+
+
+def _unique_id_prefix(config_entry_id: str, invoice_issuer: InvoiceIssuer) -> str:
+    """The part of a sensor unique_id that precedes the provider name."""
+    return f"{config_entry_id}_{invoice_issuer.issuer}_{invoice_issuer.issuer_id}_"
+
+
+def _migrate_renamed_providers(
+    hass: HomeAssistant, config_entry_id: str, invoice_issuer: InvoiceIssuer
+) -> None:
+    """
+    Keeps the existing sensor when Dijnet renames a provider.
+
+    The provider name is part of the unique_id, so without this a rename creates
+    a new sensor with a new entity_id and leaves the old one unavailable, and
+    everything that refers to the old entity_id silently stops seeing invoices.
+    The old registry entry gets the new unique_id instead, so its entity_id,
+    history and customizations stay.
+
+    If a sensor for the new name already exists (created by a version without
+    this step), nothing is changed and a warning says so. Which of the two to keep
+    cannot be told safely: the user may already have moved to the new one, and
+    the registry creation time is no guide, because Home Assistant restores it
+    when an entity comes back under a previously deleted unique_id.
+
+    Args:
+      hass:
+        The Home Assistant instance.
+      config_entry_id:
+        The id of the config entry the sensors belong to.
+      invoice_issuer:
+        The invoice issuer with the provider names Dijnet reports now.
+    """
+    registry = er.async_get(hass)
+    prefix = _unique_id_prefix(config_entry_id, invoice_issuer)
+    reported = {f"{prefix}{provider}{UNIQUE_ID_SUFFIX}" for provider in invoice_issuer.providers}
+
+    vanished: dict[str, er.RegistryEntry] = {}
+    for entry in er.async_entries_for_config_entry(registry, config_entry_id):
+        unique_id = entry.unique_id
+        if (
+            entry.domain == "sensor"
+            and unique_id.startswith(prefix)
+            and unique_id.endswith(UNIQUE_ID_SUFFIX)
+            and unique_id not in reported
+        ):
+            vanished[unique_id[len(prefix) : -len(UNIQUE_ID_SUFFIX)]] = entry
+
+    if not vanished:
+        return
+
+    pairs = pair_renamed(list(vanished), invoice_issuer.providers)
+    for old_provider, entry in vanished.items():
+        new_provider = pairs.get(old_provider)
+        if new_provider is None:
+            _LOGGER.warning(
+                "Provider '%s' of %s is no longer reported by Dijnet and no renamed "
+                "provider could be matched to it unambiguously; %s is left as it is",
+                old_provider,
+                invoice_issuer.display_name,
+                entry.entity_id,
+            )
+            continue
+
+        new_unique_id = f"{prefix}{new_provider}{UNIQUE_ID_SUFFIX}"
+        duplicate_id = registry.async_get_entity_id("sensor", DOMAIN, new_unique_id)
+        if duplicate_id is not None:
+            _LOGGER.warning(
+                "Dijnet renamed provider '%s' to '%s', but %s already exists for the new "
+                "name, so %s is left unavailable. Keep one of them: remove the one you do "
+                "not use, and if that is the new one, restart to move its name onto the old",
+                old_provider,
+                new_provider,
+                duplicate_id,
+                entry.entity_id,
+            )
+            continue
+
+        registry.async_update_entity(entry.entity_id, new_unique_id=new_unique_id)
+        _LOGGER.warning(
+            "Dijnet renamed provider '%s' to '%s'; %s keeps its entity_id",
+            old_provider,
+            new_provider,
+            entry.entity_id,
+        )
 
 
 class InvoiceAmountSensor(SensorEntity):
@@ -133,8 +225,7 @@ class InvoiceAmountSensor(SensorEntity):
         self._invoice_issuer = invoice_issuer
         self._state = None
         self._attr_unique_id = (
-            f"{config_entry_id}_{invoice_issuer.issuer}_"
-            f"{invoice_issuer.issuer_id}_{provider}_amount"
+            f"{_unique_id_prefix(config_entry_id, invoice_issuer)}{provider}{UNIQUE_ID_SUFFIX}"
         )
         self._provider = provider
         self.entity_description = SensorEntityDescription(
