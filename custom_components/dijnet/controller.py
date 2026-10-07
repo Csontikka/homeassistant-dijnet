@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -9,6 +10,7 @@ from datetime import date, datetime, timedelta
 from os import makedirs, path, remove
 from typing import TYPE_CHECKING, Any, Self
 
+import aiohttp
 import anyio
 import pytz
 import yaml
@@ -24,13 +26,25 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class DijnetPageError(Exception):
+class DijnetError(Exception):
+    """Dijnet could not be used for now; worth trying again later."""
+
+
+class DijnetPageError(DijnetError):
     """
     Dijnet answered with a page the integration cannot read.
 
     Almost always the login screen, which is what Dijnet serves when
     it does not accept the session that the request carries.
     """
+
+
+class DijnetConnectionError(DijnetError):
+    """Dijnet could not be reached: DNS, connection or timeout error."""
+
+
+class DijnetAuthError(DijnetError):
+    """Dijnet did not accept the username and password."""
 
 
 MIN_DATE = "1990-01-01"
@@ -41,6 +55,13 @@ MIN_TIME_BETWEEN_ISSUER_UPDATES = timedelta(days=1)
 # Assistant retries a not-ready platform on its own schedule, and every
 # attempt would otherwise be another login on dijnet.hu.
 RETRY_COOLDOWN = timedelta(minutes=15)
+# A rejected login is retried far less often: when the password has changed,
+# a retry every RETRY_COOLDOWN would be close to a hundred failed logins a day.
+AUTH_RETRY_COOLDOWN = timedelta(hours=2)
+# Home Assistant waits 60 seconds for a platform to set up, and when that runs
+# out it gives up for good, without retrying. A load that hangs (packets
+# dropped instead of refused) must fail before that, as a retryable error.
+ISSUER_LOAD_TIMEOUT = 45
 PAID_INVOICES_FILENAME = ".dijnet_paid_invoices_{0}.yaml"
 REGISTRY_FILENAME = ".dijnet_registry_{0}.yaml"
 ATTR_REGISTRY_NEXT_QUERY_DATE = "next_query_date"
@@ -340,6 +361,8 @@ class DijnetController:
         self._paid_invoices: list[Invoice] = []
         self._issuers: list[InvoiceIssuer] = []
         self._issuers_failed_at: datetime | None = None
+        self._issuers_retry_after = RETRY_COOLDOWN
+        self._issuers_updated_at: datetime | None = None
         self._remove_old_files()
 
     def _remove_old_files(self: Self) -> None:
@@ -390,21 +413,100 @@ class DijnetController:
         await self.update_registered_issuers()
         return self._issuers
 
-    @Throttle(MIN_TIME_BETWEEN_ISSUER_UPDATES)
     async def update_registered_issuers(self: Self) -> None:
-        """Updates the registered issuers list."""
-        issuers: list[InvoiceIssuer] = []
+        """
+        Updates the registered issuers list, at most once a day.
+
+        Not a Throttle: a Throttle counts a failed call as a call, so the
+        retry that follows a failure would get the empty list from memory
+        for a whole day, and the platform would set up with no sensors.
+        Only a successful load starts the one-day wait here.
+
+        A failed refresh keeps a list that was loaded before; it raises only
+        when there is no list yet.
+
+        Raises:
+          DijnetError:
+            Dijnet could not be reached, did not accept the login, or
+            answered with a page that cannot be read.
+        """
+        now = datetime.now(tz=TZ)
+        if (
+            self._issuers_updated_at is not None
+            and now - self._issuers_updated_at < MIN_TIME_BETWEEN_ISSUER_UPDATES
+        ):
+            return
 
         if self._issuers_failed_at is not None:
-            since = datetime.now(tz=TZ) - self._issuers_failed_at
-            if since < RETRY_COOLDOWN:
+            since = now - self._issuers_failed_at
+            if since < self._issuers_retry_after:
+                if self._issuers_updated_at is not None:
+                    return
                 # Answer from memory: no login, no request, nothing for Dijnet
                 # to count against the account.
-                wait = int((RETRY_COOLDOWN - since).total_seconds())
-                raise DijnetPageError(
+                wait = int((self._issuers_retry_after - since).total_seconds())
+                raise DijnetError(
                     f"Waiting {wait} more seconds before contacting Dijnet again "
                     "after the previous failure"
                 )
+
+        try:
+            async with asyncio.timeout(ISSUER_LOAD_TIMEOUT):
+                issuers = await self._load_registered_issuers()
+        except Exception as error:
+            # Whatever went wrong, it must not end in a platform that gave up
+            # for good: Dijnet down, the network down, DNS, a timeout, a
+            # maintenance page, or a page whose layout cannot be parsed.
+            failure = self._issuer_failure(error)
+            self._issuers_failed_at = datetime.now(tz=TZ)
+            self._issuers_retry_after = (
+                AUTH_RETRY_COOLDOWN if isinstance(failure, DijnetAuthError) else RETRY_COOLDOWN
+            )
+            if isinstance(failure, DijnetAuthError):
+                _LOGGER.error(  # noqa: TRY400 - a rejected login needs no traceback
+                    "Dijnet did not accept the login of %s. If the password was "
+                    "changed, update it in the integration; the next try is in %s",
+                    self._username,
+                    self._issuers_retry_after,
+                )
+            if self._issuers_updated_at is not None:
+                _LOGGER.warning(
+                    "Could not refresh the Dijnet provider list, keeping the one loaded at %s: %s",
+                    self._issuers_updated_at,
+                    failure,
+                )
+                return
+            if failure is error:
+                raise
+            raise failure from error
+
+        self._issuers = issuers
+        self._issuers_updated_at = datetime.now(tz=TZ)
+        self._issuers_failed_at = None
+
+    @staticmethod
+    def _issuer_failure(error: Exception) -> DijnetError:
+        """The DijnetError that stands for an error of the issuer load."""
+        if isinstance(error, DijnetError):
+            return error
+        if isinstance(error, (aiohttp.ClientError, TimeoutError)):
+            return DijnetConnectionError(f"Could not reach Dijnet: {error or type(error).__name__}")
+        if isinstance(error, (ValueError, KeyError)):
+            # Expected while Dijnet is in maintenance: the login gets an HTML
+            # page where it expects JSON. No traceback for every retry.
+            _LOGGER.warning("Dijnet answered with a page that could not be read: %r", error)
+        else:
+            _LOGGER.exception("Dijnet answered with a page that could not be read")
+        return DijnetPageError(f"Dijnet answered with an unreadable page: {error!r}")
+
+    async def _load_registered_issuers(self: Self) -> list[InvoiceIssuer]:
+        """
+        Loads the registered issuers from Dijnet.
+
+        Returns:
+          The list of registered invoice issuers.
+        """
+        issuers: list[InvoiceIssuer] = []
 
         _LOGGER.debug("Updating issuers.")
 
@@ -412,7 +514,7 @@ class DijnetController:
             await session.get_root_page()
 
             if not await session.post_login(self._username, self._password):
-                return
+                raise DijnetAuthError("Dijnet did not accept the username and password")
 
             await session.get_main_page()
 
@@ -421,7 +523,6 @@ class DijnetController:
             search_page_text = search_page.decode("iso-8859-2")
             providers_match = re.search(r"var ropts = (.*);", search_page_text)
             if providers_match is None:
-                self._issuers_failed_at = datetime.now(tz=TZ)
                 excerpt = " ".join(search_page_text.split())[:200]
                 _LOGGER.error(
                     "The invoice search page did not contain the provider list "
@@ -443,6 +544,10 @@ class DijnetController:
             invoice_providers_response_pquery = PyQuery(
                 invoice_providers_response.decode("iso-8859-2").encode("utf-8")
             )
+            if not invoice_providers_response_pquery.find(".table"):
+                # An account with no providers still gets the table, only
+                # empty; no table at all is not the page that was asked for.
+                raise DijnetPageError("Dijnet did not return the registered providers page")
             for row in invoice_providers_response_pquery.find(".table > tbody > tr").items():
                 issuer_name = row.children("td:nth-child(1)").text()
                 issuer_id = row.children("td:nth-child(2)").text()
@@ -456,8 +561,7 @@ class DijnetController:
                 issuers.append(issuer)
                 _LOGGER.debug("Issuer found (%s)", issuer)
 
-            self._issuers = issuers
-            self._issuers_failed_at = None
+        return issuers
 
     @Throttle(MIN_TIME_BETWEEN_UPDATES)
     async def update_invoices(self: Self) -> None:  # noqa: PLR0912, PLR0915, C901

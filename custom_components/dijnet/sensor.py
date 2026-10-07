@@ -24,7 +24,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from .const import CONF_DOWNLOAD_DIR, DOMAIN
 from .controller import (
     DijnetController,
-    DijnetPageError,
+    DijnetError,
     InvoiceIssuer,
     get_controller,
 )
@@ -90,8 +90,9 @@ async def async_setup_entry(
 
     try:
         registered_invoice_issuers = await controller.get_issuers()
-    except DijnetPageError as error:
-        # Not a permanent failure: let Home Assistant retry the platform
+    except DijnetError as error:
+        # Not a permanent failure (Dijnet or the network is down, or Dijnet
+        # did not accept the session): let Home Assistant retry the platform
         # instead of leaving every entity unavailable until a restart.
         raise PlatformNotReady(str(error)) from error
 
