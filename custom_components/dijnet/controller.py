@@ -78,6 +78,10 @@ ATTR_PAID_AT = "paid_at"
 
 TZ = pytz.timezone("Europe/Budapest")
 
+# The bank collects the invoice (direct debit). Substring match on the state
+# column. "Beszedésre vár" appeared in 2026-10, before "Beszedés alatt".
+COLLECTION_STATES = ["Csoportos beszedés", "Beszedésre vár", "Beszedés alatt"]
+
 
 class InvoiceIssuer:
     """Represents an invoice issuer."""
@@ -602,16 +606,11 @@ class DijnetController:
             invoices_pyquery = PyQuery(search_result.decode("iso-8859-2").encode("utf-8"))
             possible_new_paid_invoices: list[PaidInvoice] = []
             possible_new_unpaid_invoices: list[Invoice] = []
-            index = 0
-            for row in invoices_pyquery.find(".table > tbody > tr").items():
+            # index is the row number Dijnet uses to open an invoice (vfw_rowid),
+            # so it counts every row of the result.
+            for index, row in enumerate(invoices_pyquery.find(".table > tbody > tr").items()):
                 invoice: Invoice = None
-                is_paid: bool | None = self._is_invoice_paid(row)
-                if is_paid is None:
-                    _LOGGER.error(
-                        "Failed to determine invoice state. State column text: %s",
-                        row.children("td:nth-child(8)").text(),
-                    )
-                    continue
+                is_paid: bool = self._is_invoice_paid(row)
 
                 if is_paid:
                     await session.get_invoice_page(index)
@@ -687,7 +686,6 @@ class DijnetController:
                             async with await anyio.open_file(full_path, "wb") as file:
                                 await file.write(file_content)
 
-                index += 1
                 await session.get_invoice_list_page()
 
             paid_invoices = self._paid_invoices.copy()
@@ -789,7 +787,16 @@ class DijnetController:
 
         return invoice
 
-    def _is_invoice_paid(self: Self, row: PyQuery) -> bool | None:
+    def _is_invoice_paid(self: Self, row: PyQuery) -> bool:
+        """
+        Whether the invoice in the search result row is paid.
+
+        A state text that is not known counts as unpaid. Skipping the row, as
+        before, made a real open invoice disappear without a trace: Dijnet
+        showed "Beszedésre vár" for a few hours on two direct debit invoices,
+        and both were missing from every sensor until the state changed.
+        Showing an invoice that turns out to be paid is the safer mistake.
+        """
         state_text = row.children("td:nth-child(8)").text()
 
         paid_states: list[str] = ["Rendezett", "Fizetve"]
@@ -806,7 +813,7 @@ class DijnetController:
         if any(state in state_text for state in unpaid_states):
             return False
 
-        collection: bool = "Csoportos beszedés" in state_text or "Beszedés alatt" in state_text
+        collection: bool = any(state in state_text for state in COLLECTION_STATES)
         if collection:
             if self._encashment_reported_as_paid_after_deadline:
                 deadline = (
@@ -816,7 +823,13 @@ class DijnetController:
                 )
                 return deadline < datetime.now(tz=TZ).date()
             return False
-        return None
+
+        _LOGGER.warning(
+            "Unknown invoice state '%s' (invoice %s), reported as unpaid so that it stays visible",
+            state_text,
+            row.children("td:nth-child(3)").text(),
+        )
+        return False
 
     async def _initialize_registry_and_unpaid_invoices(self: Self) -> None:
         paid_invoices = None

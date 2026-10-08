@@ -44,13 +44,15 @@ Dijnet shows in the state column of the invoice list, stored verbatim.
 | --- | --- |
 | `Csoportos beszedés` | direct debit, collection still pending |
 | `Tovább a fizetéshez` | waiting to be paid manually |
+| `Beszedésre vár` | collection scheduled (seen for a few hours before `Beszedés alatt`) |
 | `Beszedés alatt` | collection in progress |
 | `Rendezetlen`, `Mobiltelefonra küldve`, `Internetbanknak átadva` | other unpaid states |
 | `Rendezett`, `Fizetve` | settled - these never appear in `unpaid_invoices` |
 
 Dijnet is free to reword these, and the field is `null` for invoices restored from a
 cache written by an older version, so compare defensively: an unknown or missing value
-should leave an invoice **visible** rather than hide it.
+should leave an invoice **visible** rather than hide it. The component does the same: an
+invoice whose state it does not know is reported as unpaid, with a warning in the log.
 
 ### Why it is useful
 
@@ -62,12 +64,12 @@ alone, which is why every unpaid invoice used to look equally urgent.
 The examples below build on one rule:
 
 > An unpaid invoice needs attention **unless** its `payment_method` says the
-> bank is collecting it (`Csoportos beszedés` or `Beszedés alatt`) **and** its
-> deadline has not passed yet.
+> bank is collecting it (`Csoportos beszedés`, `Beszedésre vár` or `Beszedés alatt`)
+> **and** its deadline has not passed yet.
 
-Match those two as **substrings**, not with `==`. That is what the component
-itself does (`controller._is_invoice_paid` puts both into one `collection`
-case), and Dijnet is free to pad the cell with anything else.
+Match those three as **substrings**, not with `==`. That is what the component
+itself does (`controller.COLLECTION_STATES`, one `collection` case in
+`_is_invoice_paid`), and Dijnet is free to pad the cell with anything else.
 
 One state does not reach these examples at all: if the text matches none of the
 patterns the component knows, the invoice is logged as an error and skipped, so
@@ -95,7 +97,7 @@ template:
             {% set deadline = as_datetime(inv.deadline | default('', true)) %}
             {% set days = (deadline.date() - now().date()).days if deadline else 999 %}
             {% set pm = inv.payment_method | default('', true) %}
-            {% set debit = 'Csoportos beszedés' in pm or 'Beszedés alatt' in pm %}
+            {% set debit = 'Csoportos beszedés' in pm or 'Beszedésre vár' in pm or 'Beszedés alatt' in pm %}
             {% if not (debit and days >= 0) %}{% set ns.count = ns.count + 1 %}{% endif %}
           {% endfor %}{% endfor %}
           {{ ns.count }}
@@ -112,7 +114,7 @@ template:
             {% set deadline = as_datetime(inv.deadline | default('', true)) %}
             {% set days = (deadline.date() - now().date()).days if deadline else 999 %}
             {% set pm = inv.payment_method | default('', true) %}
-            {% set debit = 'Csoportos beszedés' in pm or 'Beszedés alatt' in pm %}
+            {% set debit = 'Csoportos beszedés' in pm or 'Beszedésre vár' in pm or 'Beszedés alatt' in pm %}
             {% if debit and days >= 0 %}{% set ns.count = ns.count + 1 %}{% endif %}
           {% endfor %}{% endfor %}
           {{ ns.count }}
@@ -214,7 +216,7 @@ A markdown card can list the two groups separately:
   {%- set deadline = as_datetime(inv.deadline | default('', true)) %}
   {%- set days = (deadline.date() - now().date()).days if deadline else 999 %}
   {%- set pm = inv.payment_method | default('', true) %}
-  {%- set debit = 'Csoportos beszedés' in pm or 'Beszedés alatt' in pm %}
+  {%- set debit = 'Csoportos beszedés' in pm or 'Beszedésre vár' in pm or 'Beszedés alatt' in pm %}
 - {{ inv.display_name }}: {{ inv.amount }} Ft - {{ inv.deadline }}
   {%- if debit and days >= 0 %} (direct debit, no action needed)
   {%- elif days < 0 %} **overdue**
